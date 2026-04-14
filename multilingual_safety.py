@@ -12,7 +12,6 @@ repo_dir = "Multilingual_safety_benchmark" # Name of the directory to be created
 # Check if the repository has already been cloned to avoid downloading it twice
 if not os.path.exists(repo_dir):
     print("Cloning the entire repository (this might take a few moments)...")
-    # This executes the 'git clone' command in your terminal automatically
     subprocess.run(["git", "clone", repo_url])
     print("✅ Repository successfully cloned to your local machine!")
 else:
@@ -24,7 +23,7 @@ else:
 # ==========================================
 print("\nStarting the search for files in the English ('en') folder...")
 
-# Point directly to the 'en' folder inside the downloaded repo
+
 english_folder = os.path.join(repo_dir, "en")
 
 # Search for all .csv files, automatically exploring subfolders
@@ -33,17 +32,11 @@ csv_file_paths = glob.glob(os.path.join(english_folder, "**", "*.csv"), recursiv
 dataframes_list = []
 for file_path in csv_file_paths:
     try:
-        # 1. IL TRUCCO: header=None dice a Pandas di non usare la prima riga come titolo.
         temp_df = pd.read_csv(file_path, header=None)
-        
-        # 2. Rinominiamo la colonna 0 (la prima) in 'prompt'
         temp_df.rename(columns={0: 'prompt'}, inplace=True)
         
-        # 3. Salviamo la categoria originale (il nome della cartella)
         folder_name = os.path.basename(os.path.dirname(file_path))
         temp_df['original_category'] = folder_name
-        
-        # Se per caso c'è una seconda colonna misteriosa nel CSV, teniamo solo 'prompt' e 'original_category'
         temp_df = temp_df[['prompt', 'original_category']]
         
         dataframes_list.append(temp_df)

@@ -6,7 +6,7 @@ import asyncio
 from dotenv import load_dotenv
 
 
-load_dotenv(dotenv_path="key.env")  # carica il .env
+load_dotenv(dotenv_path="key.env")  
 api_key = os.environ.get("GROQ_API_KEY")
 print(f"API key caricata: {api_key[:10]}..." if api_key else "❌ API key NON trovata!")
 client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -28,7 +28,7 @@ dataset_files_traduzione = {
 }
 
 MODELLO = "llama-3.3-70b-versatile"
-CONCURRENCY = 20  # richieste simultanee — aumenta se il rate limit lo permette
+CONCURRENCY = 20  
 
 def tronca_risposta(testo: str, n_parole: int = 15) -> str:
     return " ".join(testo.strip().split()[:n_parole])
@@ -36,8 +36,8 @@ def tronca_risposta(testo: str, n_parole: int = 15) -> str:
 async def processa_prompt(prompt: str, semaphore: asyncio.Semaphore) -> str:
     if not prompt.strip():
         return ""
-    async with semaphore:  # controlla la concorrenza massima
-        for attempt in range(3):  # retry automatico
+    async with semaphore:  
+        for attempt in range(3):  # Automatic Retry
             try:
                 response = await client.chat.completions.create(
                     model=MODELLO,
@@ -117,19 +117,13 @@ async def traduci_dataset(file_path: str, lingua: str):
         await asyncio.gather(*[task(i, t) for i, t in enumerate(risposte)])
 
     df["Groq_Response_EN"] = pd.Series(traduzioni, index=df.index)
-    df.to_csv(file_path, index=False, encoding="utf-8-sig")  # sovrascrive il file esistente
+    df.to_csv(file_path, index=False, encoding="utf-8-sig")  
     print(f"✅ Colonna 'Groq_Response_EN' aggiunta a: {file_path}")
 
 
 async def main():
-    # Fase 1 — commentata perché già eseguita
-    # for file_path in dataset_files:
-    #     if not os.path.exists(file_path):
-    #         print(f"⚠️ File non trovato: {file_path}")
-    #         continue
-    #     await processa_dataset(file_path)
 
-    # Fase 2 — solo traduzioni
+    # Step 2 — Only Translation
     for file_path, lingua in dataset_files_traduzione.items():
         if not os.path.exists(file_path):
             print(f"⚠️ File non trovato: {file_path}")
