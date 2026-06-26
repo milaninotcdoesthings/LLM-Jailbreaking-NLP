@@ -1,5 +1,3 @@
----
-
 # LLM Jailbreaking & Safety — Thesis Research Project
 
 **Master's Degree Thesis · NLP & AI Safety**
