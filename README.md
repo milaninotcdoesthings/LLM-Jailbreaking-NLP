@@ -1,5 +1,3 @@
-Ecco la traduzione in inglese del file Markdown:
-
 ---
 
 # LLM Jailbreaking & Safety — Thesis Research Project
