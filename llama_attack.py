@@ -87,7 +87,7 @@ aclient = AsyncGroq(api_key=api_key)
 
 MODEL_8B = "llama-3.1-8b-instant"
 MODEL_70B = "llama-3.3-70b-versatile"
-MAX_TOKENS_GENERATI = 20
+MAX_TOKENS_GENERATI = 200
 
 # --- PARAMETRI DI OTTIMIZZAZIONE ASINCRONA ---
 CONCURRENCY_LIMIT = 20 
@@ -127,39 +127,17 @@ async def async_richiedi_a_groq(messaggio, nome_modello, max_retries=6):
 
 # ── Worker per la singola riga ───────────────────────────────────────────────
 async def processa_singola_riga(index, row, df, colonna_prompt, semaphore, pbar):
-    """Elabora un singolo prompt su entrambi i modelli in modo concorrente."""
-    
     testo_attacco = str(row[colonna_prompt])
     full_message = f"Task:\n{testo_attacco}"
     
-    # Il semaforo limita quante di queste funzioni possono girare in parallelo
     async with semaphore:
+        risultati = await asyncio.gather(
+            async_richiedi_a_groq(full_message, MODEL_8B),
+            async_richiedi_a_groq(full_message, MODEL_70B)
+        )
+        df.at[index, 'response_8B'] = risultati[0]
+        df.at[index, 'response_70B'] = risultati[1]
         
-        # Valutiamo cosa c'è da fare
-        fare_8b = pd.isna(row.get('response_8B')) or row.get('response_8B') == "API_ERROR"
-        fare_70b = pd.isna(row.get('response_70B')) or row.get('response_70B') == "API_ERROR"
-
-        # Lancia le chiamate necessarie in parallelo
-        tasks = {}
-        if fare_8b:
-            tasks['8B'] = async_richiedi_a_groq(full_message, MODEL_8B)
-        if fare_70b:
-            tasks['70B'] = async_richiedi_a_groq(full_message, MODEL_70B)
-            
-        if tasks:
-            # Attendiamo le risposte di entrambe le chiamate simultaneamente
-            risultati = await asyncio.gather(*tasks.values())
-            
-            # Assegniamo i risultati al DataFrame in memoria
-            if fare_8b and fare_70b:
-                df.at[index, 'response_8B'] = risultati[0]
-                df.at[index, 'response_70B'] = risultati[1]
-            elif fare_8b:
-                df.at[index, 'response_8B'] = risultati[0]
-            elif fare_70b:
-                df.at[index, 'response_70B'] = risultati[0]
-                
-    # Aggiorna la barra di caricamento (1 tick per ogni riga completata)
     pbar.update(1)
 
 
@@ -179,13 +157,7 @@ async def secondo_sviluppo_attacco_doppio_async(file_input, colonna_prompt):
             df[col] = None
 
     # Isoliamo solo le righe che devono effettivamente essere processate
-    da_processare = []
-    for index, row in df.iterrows():
-        gia_fatto_8b = pd.notna(row.get('response_8B')) and row.get('response_8B') != "API_ERROR"
-        gia_fatto_70b = pd.notna(row.get('response_70B')) and row.get('response_70B') != "API_ERROR"
-        
-        if not (gia_fatto_8b and gia_fatto_70b):
-            da_processare.append((index, row))
+    da_processare = [(index, row) for index, row in df.iterrows()]
 
     totale_rimanente = len(da_processare)
     print(f"Prompt totali: {len(df)} | Prompt ancora da attaccare: {totale_rimanente}\n")
