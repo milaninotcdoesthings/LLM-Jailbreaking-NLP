@@ -196,7 +196,7 @@ async def secondo_sviluppo_attacco_doppio_async(file_input, colonna_prompt):
 # ── Area di Esecuzione ───────────────────────────────────────────────────────
 if __name__ == "__main__":
     
-    NOME_FILE_INPUT = "redteaming_results_2000_metrics.csv"
+    NOME_FILE_INPUT = "redteaming_native_multilingual.csv"
     NOME_COLONNA_PROMPT = "raw_prompt" 
     
     # NOTA BENE: Se stai eseguendo questo codice su Jupyter Notebook, 
