@@ -2,3 +2,4 @@ key.env
 __pycache__/
 .DS_Store
 .vscode/
+phase3_internals/notebooks and csv result files/key_new.env
