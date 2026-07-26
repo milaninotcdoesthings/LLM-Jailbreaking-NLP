@@ -20,3 +20,4 @@ activations.npz
 ckpt_*.parquet
 judge_validation/data/
 validate_judge/data/
+native_vs_translated/data/
