@@ -18,3 +18,5 @@ qwen_3b_local/
 activations.npz
 *.npz
 ckpt_*.parquet
+judge_validation/data/
+validate_judge/data/
