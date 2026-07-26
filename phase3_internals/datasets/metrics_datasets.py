@@ -1,19 +1,13 @@
 """
-benchmarks_pipeline.py - merge AdvBench / XSTest / Do-Not-Answer + metrics.
+step2_metrics.py - metrics on AdvBench / XSTest / Do-Not-Answer.
 
-Same models as metrics_computation.py (phases 1-2) so values stay comparable.
-Adds Flesch readability.
+Same models as metrics_computation.py (phase 1-2), so values are comparable.
+Adds Flesch readability via textstat.
 
-Input (put these in DATA_DIR):
-    transfer_expriment_behaviors.csv   AdvBench, no header, 1 prompt per line
-    xstest_prompts.csv                 XSTest, cols: id,prompt,type,label,focus,note
-    data_en.csv                        Do-Not-Answer, col: question
+Input:  benchmarks_raw.csv   (from step0_download.py)
+Output: benchmarks_metrics.parquet
 
-Output:
-    benchmarks_raw.csv         merged prompts
-    benchmarks_metrics.parquet prompts + metrics
-
-pip install textstat sentence-transformers pyarrow
+pip install textstat sentence-transformers
 """
 
 import gc
@@ -28,10 +22,8 @@ from tqdm import tqdm
 tqdm.pandas()
 
 BASE = Path("/Users/tommasomilanino/Developer/THESIS")
-DATA_DIR = BASE                      # <-- change if the CSVs are in a subfolder
-ADVBENCH_PATH = Path("/Users/tommasomilanino/Developer/THESIS/phase3_internals/datasets/advbench/data/transfer_expriment_behaviors.csv")
-XSTEST_PATH   = Path("/Users/tommasomilanino/Developer/THESIS/phase3_internals/datasets/xstest/xstest_prompts.csv")
-DNA_PATH      = Path("/Users/tommasomilanino/Developer/THESIS/phase3_internals/datasets/donotanswer/datasets/data_en.csv")
+IN = BASE / "benchmarks_raw.csv"
+OUT = BASE / "benchmarks_metrics.parquet"
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 
 
@@ -44,75 +36,13 @@ def free_memory():
 def save_checkpoint(df, phase):
     p = BASE / f"ckpt_bm_{phase}.parquet"
     df.to_parquet(p, engine="pyarrow")
-    print(f"  saved: {p.name}")
+    print(f"saved: {p.name}")
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# PART A - merge the three benchmarks
-# ═══════════════════════════════════════════════════════════════════════
-frames = []
-
-# --- AdvBench: plain text, one prompt per line, no header ---------------
-p = ADVBENCH_PATH
-lines = [l.strip() for l in p.open(encoding="utf-8") if l.strip()]
-frames.append(pd.DataFrame({
-    "source": "advbench",
-    "text": lines,
-    "label": 1,
-    "category": "unspecified",
-    "hard_negative": False,
-    "notes": "",
-}))
-print(f"advbench:      {len(lines)} prompts")
-
-# --- XSTest: safe ones are the hard negatives ---------------------------
-x = pd.read_csv(XSTEST_PATH)
-is_unsafe = x["label"].astype(str).str.lower().eq("unsafe")
-frames.append(pd.DataFrame({
-    "source": "xstest",
-    "text": x["prompt"],
-    "label": is_unsafe.astype(int),
-    "category": x["type"],
-    "hard_negative": ~is_unsafe,          # benign but scary-sounding
-    "notes": x["focus"].astype(str) + " | " + x["note"].astype(str),
-}))
-print(f"xstest:        {len(x)} prompts ({(~is_unsafe).sum()} hard negatives)")
-
-# --- Do-Not-Answer ------------------------------------------------------
-d = pd.read_csv(DNA_PATH)
-frames.append(pd.DataFrame({
-    "source": "do_not_answer",
-    "text": d["question"],
-    "label": 1,
-    "category": d["risk_area"],
-    "hard_negative": False,
-    "notes": d["types_of_harm"].astype(str),
-}))
-print(f"do_not_answer: {len(d)} prompts")
-
-for p_ in [ADVBENCH_PATH, XSTEST_PATH, DNA_PATH]:
-    assert p_.exists(), f"Not found {p_}"
-
-RAW_OUT = BASE / "benchmarks_raw.csv"          # <-- questa mancava
-OUT = BASE / "benchmarks_metrics.parquet"      # <-- e questa
-device = "mps" if torch.backends.mps.is_available() else "cpu"
-
-df = pd.concat(frames, ignore_index=True)
-df["text"] = df["text"].astype(str).str.strip()
-df = df[df.text.str.len().between(5, 2000)].drop_duplicates("text").reset_index(drop=True)
-df["id"] = ["bm-" + str(i).zfill(5) for i in range(len(df))]
-df["lang"] = "en"
-df["raw_prompt"] = df["text"]         # name expected by the phase 1-2 code
-df["language"] = "english"
-
-df.to_csv(RAW_OUT, index=False)
-print(f"\nmerged -> {len(df)} unique prompts | saved {RAW_OUT.name}")
-print(df.groupby(["source", "label"]).size().to_string())
-
-# ═══════════════════════════════════════════════════════════════════════
-# PART B - metrics (same models as phases 1-2)
-# ═══════════════════════════════════════════════════════════════════════
-print(f"\ndevice: {device}")
+df = pd.read_csv(IN)
+df["raw_prompt"] = df["text"].astype(str)
+df["language"] = "english"          # all three benchmarks are English
+print(f"loaded {len(df)} prompts | device: {device}")
 
 # ── PHASE 1: Token Length ───────────────────────────────────────────────
 try:
@@ -149,7 +79,7 @@ try:
 
     def get_intent(t):
         try:
-            return clf(str(t)[:512], labels, multi_label=False)["labels"][0]
+            return clf(str(t), labels, multi_label=False)["labels"][0]
         except Exception:
             return None
 
@@ -168,9 +98,9 @@ try:
 
     def get_toxicity(t):
         try:
-            for dd in tox(str(t)[:512], top_k=None):
-                if dd["label"].lower() == "toxic":
-                    return dd["score"]
+            for d in tox(str(t)[:512], top_k=None):
+                if d["label"].lower() == "toxic":
+                    return d["score"]
             return 0.0
         except Exception:
             return None
@@ -229,7 +159,7 @@ try:
 except Exception as e:
     print(f"Phase 6 failed: {e}")
 
-# ── PHASE 7: Readability ────────────────────────────────────────────────
+# ── PHASE 7: Readability (new) ──────────────────────────────────────────
 try:
     print("\n=== PHASE 7: Readability ===")
     df["flesch_reading_ease"] = df["raw_prompt"].progress_apply(
@@ -242,15 +172,11 @@ try:
 except Exception as e:
     print(f"Phase 7 failed: {e}")
 
-# ═══════════════════════════════════════════════════════════════════════
 df.to_parquet(OUT, engine="pyarrow")
 print(f"\ndone -> {OUT}  ({len(df)} rows)")
 
 cols = ["prompt_token_length", "toxicity_score", "sentiment_score",
         "perplexity_score", "flesch_reading_ease"]
-have = [c for c in cols if c in df]
-print("\n" + df[have].describe().round(2).to_string())
+print(df[[c for c in cols if c in df]].describe().round(2).to_string())
 print("\nmissing values:")
-print(df[have].isna().sum().to_string())
-print("\nby source:")
-print(df.groupby("source")[have].mean().round(2).to_string())
+print(df[[c for c in cols if c in df]].isna().sum().to_string())

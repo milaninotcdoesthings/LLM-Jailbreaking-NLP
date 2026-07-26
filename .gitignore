@@ -3,3 +3,18 @@ __pycache__/
 .DS_Store
 .vscode/
 phase3_internals/notebooks and csv result files/key_new.env
+
+# jailbreak grezzi - MAI committare
+rainbow_winners.jsonl
+rainbow_log.jsonl
+rainbow_results.jsonl
+
+# modelli locali
+qwen_3b_local/
+*.safetensors
+*.gguf
+
+# artefatti pesanti
+activations.npz
+*.npz
+ckpt_*.parquet
