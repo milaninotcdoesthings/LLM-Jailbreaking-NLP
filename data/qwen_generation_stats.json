@@ -1,0 +1,8 @@
+{
+  "accepted": 1800,
+  "rejected_exact": 0,
+  "rejected_semantic": 5,
+  "rejected_malformed": 0,
+  "api_errors": 0,
+  "total_returned": 1830
+}
