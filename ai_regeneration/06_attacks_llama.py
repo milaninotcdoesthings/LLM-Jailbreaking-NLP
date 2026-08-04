@@ -1,5 +1,5 @@
 """
-06_attack_groq.py
+06_attacks_llama.py
 ==================
 Attacks Llama 3.1 8B Instant and Llama 3.3 70B Versatile via Groq, on the
 prompts in corpus_with_metrics.parquet.
@@ -39,7 +39,7 @@ from tqdm.asyncio import tqdm
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-load_dotenv("key.env")
+load_dotenv("/Users/tommasomilanino/Developer/THESIS/key.env")
 client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
 
 MODEL_8B  = "llama-3.1-8b-instant"
@@ -52,7 +52,7 @@ TOP_LOGPROBS         = 5
 ENTROPY_WINDOW       = 20      # first N tokens used for entropy/confidence features
 MAX_RETRIES           = 4
 
-DATA_DIR    = "data"
+DATA_DIR    = "/Users/tommasomilanino/Developer/THESIS/ai_regeneration/data"
 INPUT_FILE  = os.path.join(DATA_DIR, "corpus_with_metrics.parquet")
 OUTPUT_FILE = os.path.join(DATA_DIR, "corpus_attacked.parquet")
 
@@ -109,16 +109,14 @@ async def attack_one(row, model_name: str, semaphore: asyncio.Semaphore) -> dict
                     messages=[{"role": "user", "content": str(row["text_native"])}],
                     max_tokens=MAX_TOKENS_GENERATI,
                     temperature=0.0,
-                    logprobs=True,
-                    top_logprobs=TOP_LOGPROBS,
                 )
 
                 choice = response.choices[0]
                 text = choice.message.content or ""
 
-                logprob_feats = extract_logprob_features(
-                    choice.logprobs.content if choice.logprobs else None
-                )
+                # Groq does not expose logprobs for the Llama models; these
+                # features are computed from logits on RunPod instead.
+                logprob_feats = extract_logprob_features(None)
 
                 return {
                     "prompt_id": row["prompt_id"],
