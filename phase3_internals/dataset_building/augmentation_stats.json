@@ -1,0 +1,22 @@
+{
+  "french": {
+    "before": 809,
+    "target": 2000,
+    "accepted": 1191,
+    "rejected_exact": 0,
+    "rejected_semantic": 4,
+    "rejected_malformed": 9,
+    "calls": 156,
+    "errors": 0
+  },
+  "spanish": {
+    "before": 763,
+    "target": 2000,
+    "accepted": 1237,
+    "rejected_exact": 4,
+    "rejected_semantic": 7,
+    "rejected_malformed": 11,
+    "calls": 162,
+    "errors": 0
+  }
+}

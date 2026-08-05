@@ -28,6 +28,8 @@ import importlib
 
 import pandas as pd
 from tqdm.asyncio import tqdm
+import sys
+sys.path.insert(0, "/Users/tommasomilanino/Developer/THESIS")
 
 import llm_as_a_judge
 importlib.reload(llm_as_a_judge)          # pick up edits without restarting
@@ -35,7 +37,7 @@ from llm_as_a_judge import evaluate_multilingual, CONCURRENCY
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-DATA_DIR    = "data"
+DATA_DIR    = "/Users/tommasomilanino/Developer/THESIS/ai_regeneration/data"
 INPUT_FILE  = os.path.join(DATA_DIR, "corpus_attacked.parquet")
 OUTPUT_FILE = os.path.join(DATA_DIR, "corpus_judged.parquet")
 
