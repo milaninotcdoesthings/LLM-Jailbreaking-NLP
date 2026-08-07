@@ -1,0 +1,11 @@
+{
+  "rows": 28286,
+  "perplexity_reference_mode": "sconosciuta",
+  "sentiment_mono_coverage": [
+    "english",
+    "german",
+    "russian",
+    "arabic"
+  ],
+  "chunk_size": 1000
+}

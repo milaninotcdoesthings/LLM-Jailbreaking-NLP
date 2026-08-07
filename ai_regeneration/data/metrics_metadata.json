@@ -1,0 +1,18 @@
+{
+  "rows": 6600,
+  "perplexity_reference_mode": "within-corpus median",
+  "models": {
+    "toxicity": "citizenlab/distilbert-base-multilingual-cased-toxicity",
+    "sentiment_multilingual": "lxyuan/distilbert-base-multilingual-cased-sentiments-student",
+    "sentiment_monolingual": {
+      "english": "distilbert-base-uncased-finetuned-sst-2-english",
+      "german": "oliverguhr/german-sentiment-bert",
+      "russian": "seara/rubert-tiny2-russian-sentiment",
+      "arabic": "CAMeL-Lab/bert-base-arabic-camelbert-da-sentiment"
+    },
+    "intent": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+    "perplexity": "Qwen/Qwen2.5-0.5B",
+    "tokenizer": "Qwen/Qwen2.5-7B-Instruct",
+    "embeddings": "paraphrase-multilingual-MiniLM-L12-v2"
+  }
+}
