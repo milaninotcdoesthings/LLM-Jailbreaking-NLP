@@ -1,0 +1,13 @@
+{
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "n_layers": 32,
+  "layer_indices": [
+    8,
+    16,
+    24,
+    31
+  ],
+  "hidden_dim": 4096,
+  "max_new_tokens": 512,
+  "last_n_tokens_pooled": 32
+}

@@ -20,3 +20,9 @@ activations.npz
 ckpt_*.parquet
 judge_validation/data/
 validate_judge/data/
+*.parquet
+ai_regeneration/data/checkpoints/
+phase3_internals/dataset_building/checkpoints/
+# Hidden states e file dati pesanti — rigenerabili dagli script
+*.h5
+phase3_internals/extraction/data/*.parquet

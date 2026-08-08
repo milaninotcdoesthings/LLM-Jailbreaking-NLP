@@ -1,0 +1,59 @@
+{
+  "original_rows": 28286,
+  "sampled_rows": 19539,
+  "by_language": {
+    "english": 6521,
+    "arabic": 3041,
+    "russian": 3000,
+    "german": 2977,
+    "french": 2000,
+    "spanish": 2000
+  },
+  "by_category": {
+    "other": 8527,
+    "financial_fraud": 1211,
+    "cybersecurity": 1182,
+    "physical_harm": 1114,
+    "misinformation": 1112,
+    "harassment": 1089,
+    "social_engineering": 1080,
+    "copyright": 1073,
+    "privacy": 1058,
+    "drug_synthesis": 1050,
+    "roleplay_identity": 1036,
+    "illegal_activity": 7
+  },
+  "by_source": {
+    "aya_redteaming": 4398,
+    "ai_generated": 3997,
+    "chapter2_native_multilingual": 3691,
+    "augmented": 2428,
+    "wildjailbreak": 1200,
+    "multilingual_safety_en": 1200,
+    "do_not_answer": 935,
+    "chapter2_translated": 476,
+    "xstest": 445,
+    "advbench": 348,
+    "chapter2_ai_generated": 328,
+    "harmbench": 93
+  },
+  "n_groups": 15116,
+  "language_caps": {
+    "english": 6000,
+    "russian": 3000,
+    "arabic": 3000,
+    "german": 3000,
+    "french": 2500,
+    "spanish": 2500
+  },
+  "priority_sources": {
+    "advbench": null,
+    "xstest": null,
+    "harmbench": null,
+    "do_not_answer": null,
+    "wildjailbreak": 1200,
+    "multilingual_safety_en": 1200,
+    "aya_redteaming": null
+  },
+  "seed": 42
+}
