@@ -26,3 +26,4 @@ phase3_internals/dataset_building/checkpoints/
 # Hidden states e file dati pesanti — rigenerabili dagli script
 *.h5
 phase3_internals/extraction/data/*.parquet
+phase3_internals/extraction/Data/*.parquet
