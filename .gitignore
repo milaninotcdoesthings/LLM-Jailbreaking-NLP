@@ -27,3 +27,4 @@ phase3_internals/dataset_building/checkpoints/
 *.h5
 phase3_internals/extraction/data/*.parquet
 phase3_internals/extraction/Data/*.parquet
+phase3_internals/ml_classifier/cache/
