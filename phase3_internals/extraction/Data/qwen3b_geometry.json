@@ -1,0 +1,14 @@
+{
+  "model": "Qwen/Qwen2.5-3B-Instruct",
+  "n_layers": 36,
+  "layer_indices": [
+    9,
+    18,
+    27,
+    35
+  ],
+  "hidden_dim": 2048,
+  "max_new_tokens": 512,
+  "last_n_tokens_pooled": 32,
+  "n_sampled": 9000
+}

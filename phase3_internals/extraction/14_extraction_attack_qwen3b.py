@@ -1,33 +1,29 @@
 """
 14_attack_extract_qwen3b.py
-=============================
-Attacco a Qwen2.5-3B-Instruct con estrazione contestuale degli hidden states.
+===========================
+Attacks Qwen2.5-3B-Instruct with contextual hidden-state extraction.
 
-Stesso schema esatto del file 13_attack_extract_llama8b.py — stessa logica di
-pooling, stesse feature comportamentali, stesso formato di output. Solo il
-modello e la geometria dei layer cambiano.
+Same structure as the Llama script: batched, length-sorted, resumable, hidden
+states pooled over the last 32 prompt tokens before generation.
 
-PERCHÉ LO STESSO SCHEMA CONTA. Llama 3.1 8B ha 32 layer da 4096 dimensioni,
-Qwen2.5 3B ne ha 36 da 2048. I vettori non sono confrontabili elemento per
-elemento — non esiste corrispondenza tra "layer 16 di Llama" e "layer 16 di
-Qwen", sono due spazi organizzati indipendentemente. Per questo si addestrano
-DUE classificatori separati, uno per modello, mai uno unico sui vettori misti.
+Why a second model. On its own the Llama result is a fact about one model. If
+the depth curve has the same shape on a different architecture, trained by a
+different lab on different data, it becomes a regularity. The layer counts
+differ (Qwen 36, Llama 32), so the curves are compared on relative depth, not
+layer index — which is what layer_pct in the results is for.
 
-Il confronto tra i due avviene non sui vettori ma sui RISULTATI dei due probe,
-allineati per PROFONDITÀ RELATIVA (25%/50%/75%/100% del percorso) invece che
-per indice di layer assoluto — è l'unico modo per mettere le due curve
-sull'asse stesso nonostante l'architettura diversa. Vedi 15_train_probes.py.
+SUBSAMPLE. The learning curve showed both targets saturate by ~30% of the data,
+so the full 19,539 rows are not needed here. N_SAMPLE keeps the run to about an
+hour of GPU while staying well above the saturation point. Sampling is by
+source_prompt_id so language variants stay together, matching the split logic
+used downstream.
 
-Eseguibile sia su RunPod (stesso pod dell'8B, in sequenza) sia in locale su
-Mac con MPS — Qwen 3B è abbastanza leggero da girare comodamente anche lì.
-
-Output identico per struttura a quello di Llama:
-  - qwen3b_responses.parquet
-  - qwen3b_hidden_states.h5
+Output: qwen3b_responses.parquet + qwen3b_hidden_states.h5
 """
 
 import os
 import json
+import time
 
 import numpy as np
 import pandas as pd
@@ -36,137 +32,191 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 
-# ── Configurazione ────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 
-DATA_DIR    = "data"
-INPUT_FILE  = os.path.join(DATA_DIR, "prompt_pool_with_metrics.parquet")
-RESP_FILE   = os.path.join(DATA_DIR, "qwen3b_responses.parquet")
-HIDDEN_FILE = os.path.join(DATA_DIR, "qwen3b_hidden_states.h5")
+DATA_DIR   = "data"
+INPUT_FILE = os.path.join(DATA_DIR, "prompt_pool_sampled.parquet")
 
-MAX_NEW_TOKENS   = 512
-LAST_N_TOKENS    = 32
-ENTROPY_WINDOW   = 20
-CHECKPOINT_EVERY = 50
+RESP_FILE     = os.path.join(DATA_DIR, "qwen3b_responses.parquet")
+HIDDEN_FILE   = os.path.join(DATA_DIR, "qwen3b_hidden_states.h5")
+GEOMETRY_FILE = os.path.join(DATA_DIR, "qwen3b_geometry.json")
+SAMPLE_FILE   = os.path.join(DATA_DIR, "qwen3b_sample_ids.csv")
 
-device = "cuda" if torch.cuda.is_available() else (
-    "mps" if torch.backends.mps.is_available() else "cpu")
-print(f"Device: {device}")
+N_SAMPLE = 9000          # set to None to run the full pool
+RANDOM_SEED = 42
+
+MAX_NEW_TOKENS = 512
+BATCH_SIZE     = 48      # 3B model, plenty of headroom on a 48GB card
+LAST_N_TOKENS  = 32
+MAX_PROMPT_TOKENS = 1024
+CHECKPOINT_EVERY_BATCHES = 5
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cpu":
+    raise SystemExit("No GPU detected. Check the pod before continuing.")
 
 
-# ── Caricamento modello ───────────────────────────────────────────────────────
+# ── Model ─────────────────────────────────────────────────────────────────────
 
 def load_model():
-    print(f"Caricamento {MODEL_ID}...")
+    print(f"Loading {MODEL_ID}...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
-    dtype = torch.bfloat16 if device == "cuda" else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=dtype,
-        output_hidden_states=True,
-    ).to(device)
+        torch_dtype=torch.bfloat16,
+        device_map=device,
+        attn_implementation="sdpa",
+    )
     model.eval()
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
 
     n_layers = model.config.num_hidden_layers
     layer_indices = sorted(set([
-        n_layers // 4,
-        n_layers // 2,
-        (3 * n_layers) // 4,
-        n_layers - 1,
+        n_layers // 4, n_layers // 2, (3 * n_layers) // 4, n_layers - 1,
     ]))
-    print(f"Modello caricato: {n_layers} layer totali "
-          f"(Llama 8B ne ha 32 — numeri diversi per costruzione, normale)")
-    print(f"Layer estratti (profondità relativa): {layer_indices} "
+    print(f"  {n_layers} layers, hidden dim {model.config.hidden_size}")
+    print(f"  extracted layers: {layer_indices} "
           f"({[f'{i/(n_layers-1)*100:.0f}%' for i in layer_indices]})")
+    print(f"  Llama has 32 layers / 4096 dims — different geometry by design, "
+          f"compared on relative depth")
 
     return tokenizer, model, layer_indices, n_layers
 
 
-# ── Estrazione per singolo prompt ─────────────────────────────────────────────
+# ── Batch processing ──────────────────────────────────────────────────────────
 
-def process_one(prompt_text: str, tokenizer, model, layer_indices: list[int]) -> dict:
-    messages = [{"role": "user", "content": str(prompt_text)}]
-    input_ids = tokenizer.apply_chat_template(
-        messages, return_tensors="pt", add_generation_prompt=True
+def process_batch(prompts: list[str], tokenizer, model,
+                  layer_indices: list[int]) -> list[dict]:
+    texts = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": str(p)}],
+            tokenize=False, add_generation_prompt=True)
+        for p in prompts
+    ]
+
+    encoded = tokenizer(
+        texts, return_tensors="pt", padding=True,
+        truncation=True, max_length=MAX_PROMPT_TOKENS,
     ).to(device)
-    attention_mask = torch.ones_like(input_ids)
 
     with torch.no_grad():
         outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
+            input_ids=encoded["input_ids"],
+            attention_mask=encoded["attention_mask"],
             output_hidden_states=True,
+            num_logits_to_keep=1,
         )
 
-    hidden_vectors = {}
-    for layer_idx in layer_indices:
-        layer_hidden = outputs.hidden_states[layer_idx + 1][0]
-        pooled = layer_hidden[-LAST_N_TOKENS:].mean(dim=0)
-        hidden_vectors[layer_idx] = pooled.float().cpu().numpy()
+    batch_hidden = []
+    for b in range(len(prompts)):
+        vectors = {}
+        for layer_idx in layer_indices:
+            layer_hidden = outputs.hidden_states[layer_idx + 1][b]
+            pooled = layer_hidden[-LAST_N_TOKENS:].mean(dim=0)
+            vectors[layer_idx] = pooled.float().cpu().numpy()
+        batch_hidden.append(vectors)
 
-    del outputs
-    if device == "cuda":
-        torch.cuda.empty_cache()
-    elif device == "mps":
-        torch.mps.empty_cache()
+    first_logits = outputs.logits[:, -1, :].float()
+    probs = torch.softmax(first_logits, dim=-1)
+    entropy = -(probs * torch.log(probs + 1e-12)).sum(dim=-1).cpu().numpy()
+    top2 = torch.topk(probs, k=2, dim=-1).values.cpu().numpy()
+    top1_prob, prob_gap = top2[:, 0], top2[:, 0] - top2[:, 1]
+
+    del outputs, first_logits, probs
+    torch.cuda.empty_cache()
 
     with torch.no_grad():
         gen_output = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
+            input_ids=encoded["input_ids"],
+            attention_mask=encoded["attention_mask"],
             max_new_tokens=MAX_NEW_TOKENS,
-            temperature=0.0,
             do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-            output_scores=True,
-            return_dict_in_generate=True,
+            temperature=None,
+            top_p=None,
+            pad_token_id=tokenizer.pad_token_id,
         )
 
-    generated_ids = gen_output.sequences[0][input_ids.shape[1]:]
-    response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    prompt_len = encoded["input_ids"].shape[1]
+    results = []
 
-    entropies, top1_probs, gaps = [], [], []
-    for step_scores in gen_output.scores[:ENTROPY_WINDOW]:
-        probs = torch.softmax(step_scores[0].float(), dim=-1)
-        top_probs, _ = torch.topk(probs, k=5)
-        top_probs = top_probs.cpu().numpy()
+    for b in range(len(prompts)):
+        generated_ids = gen_output[b][prompt_len:]
+        response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+        real_len = (generated_ids != tokenizer.pad_token_id).sum().item()
 
-        entropy = -np.sum(probs.cpu().numpy() * np.log(probs.cpu().numpy() + 1e-12))
-        entropies.append(entropy)
-        top1_probs.append(top_probs[0])
-        if len(top_probs) > 1:
-            gaps.append(top_probs[0] - top_probs[1])
+        results.append({
+            "response": response,
+            "finish_reason": "length" if real_len >= MAX_NEW_TOKENS else "stop",
+            "n_generated_tokens": int(real_len),
+            "first_token_entropy": float(entropy[b]),
+            "first_token_top1_prob": float(top1_prob[b]),
+            "first_token_prob_gap": float(prob_gap[b]),
+            "hidden_vectors": batch_hidden[b],
+        })
 
-    return {
-        "response": response_text,
-        "finish_reason": "stop" if len(generated_ids) < MAX_NEW_TOKENS else "length",
-        "entropy_first_tokens": float(np.mean(entropies)) if entropies else None,
-        "mean_top1_prob": float(np.mean(top1_probs)) if top1_probs else None,
-        "mean_prob_gap": float(np.mean(gaps)) if gaps else None,
-        "hidden_vectors": hidden_vectors,
-    }
+    del gen_output
+    torch.cuda.empty_cache()
+    return results
 
 
-# ── Gestione HDF5 (identico a Llama) ──────────────────────────────────────────
+# ── HDF5 ──────────────────────────────────────────────────────────────────────
 
-def get_processed_ids(h5_path: str) -> set:
-    if not os.path.exists(h5_path):
+def get_processed_ids(path: str) -> set:
+    if not os.path.exists(path):
         return set()
-    with h5py.File(h5_path, "r") as f:
+    with h5py.File(path, "r") as f:
         return set(f.keys())
 
 
-def save_hidden_vectors(h5_path: str, prompt_id: str, vectors: dict):
-    with h5py.File(h5_path, "a") as f:
-        if prompt_id in f:
-            return
-        grp = f.create_group(prompt_id)
-        for layer_idx, vec in vectors.items():
-            grp.create_dataset(f"layer_{layer_idx}", data=vec, compression="gzip")
+def save_hidden_batch(path: str, prompt_ids: list[str], vectors_list: list[dict]):
+    with h5py.File(path, "a") as f:
+        for pid, vectors in zip(prompt_ids, vectors_list):
+            if pid in f:
+                continue
+            grp = f.create_group(pid)
+            for layer_idx, vec in vectors.items():
+                grp.create_dataset(f"layer_{layer_idx}", data=vec,
+                                   compression="gzip", compression_opts=4)
+
+
+# ── Sampling ──────────────────────────────────────────────────────────────────
+
+def subsample(df: pd.DataFrame) -> pd.DataFrame:
+    """Sampled by group so language variants of one prompt stay together."""
+    if N_SAMPLE is None or len(df) <= N_SAMPLE:
+        return df
+
+    if os.path.exists(SAMPLE_FILE):
+        keep = pd.read_csv(SAMPLE_FILE)["prompt_id"]
+        out = df[df["prompt_id"].isin(keep)].reset_index(drop=True)
+        print(f"Reusing saved sample: {len(out)} rows")
+        return out
+
+    rng = np.random.default_rng(RANDOM_SEED)
+    groups = df["source_prompt_id"].unique()
+    rng.shuffle(groups)
+
+    sizes = df.groupby("source_prompt_id").size()
+    chosen, total = [], 0
+    for g in groups:
+        if total >= N_SAMPLE:
+            break
+        chosen.append(g)
+        total += sizes[g]
+
+    out = df[df["source_prompt_id"].isin(chosen)].reset_index(drop=True)
+    out[["prompt_id"]].to_csv(SAMPLE_FILE, index=False)
+
+    print(f"Subsampled: {len(out)} of {len(df)} rows "
+          f"({len(chosen)} groups)")
+    print(out["language"].value_counts().to_string())
+    return out
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -175,64 +225,100 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
 
     df = pd.read_parquet(INPUT_FILE)
-    print(f"Pool caricato: {len(df)} prompt")
+    print(f"Pool: {len(df)} rows")
+    df = subsample(df)
 
     tokenizer, model, layer_indices, n_layers = load_model()
 
-    processed_hidden = get_processed_ids(HIDDEN_FILE)
+    processed = get_processed_ids(HIDDEN_FILE)
     if os.path.exists(RESP_FILE):
-        existing_resp = pd.read_parquet(RESP_FILE)
-        processed_resp = set(existing_resp["prompt_id"])
+        existing = pd.read_parquet(RESP_FILE)
+        processed &= set(existing["prompt_id"])
     else:
-        existing_resp = pd.DataFrame()
-        processed_resp = set()
+        existing = pd.DataFrame()
 
-    already_done = processed_hidden & processed_resp
-    remaining = df[~df["prompt_id"].isin(already_done)]
-    print(f"Da processare: {len(remaining)} / {len(df)} "
-          f"(già fatti: {len(already_done)})")
+    remaining = df[~df["prompt_id"].isin(processed)].copy()
+    print(f"\nTo process: {len(remaining)} (done: {len(processed)})")
 
-    new_responses = []
+    if len(remaining) == 0:
+        print("Nothing to do.")
+        return
 
-    for i, row in tqdm(remaining.iterrows(), total=len(remaining), desc="Attacco Qwen"):
+    if "token_length_native" in remaining.columns:
+        remaining = remaining.sort_values("token_length_native")
+    else:
+        remaining["_len"] = remaining["text_native"].str.len()
+        remaining = remaining.sort_values("_len")
+    remaining = remaining.reset_index(drop=True)
+
+    new_rows = []
+    n_batches = (len(remaining) + BATCH_SIZE - 1) // BATCH_SIZE
+    t_start = time.time()
+
+    pbar = tqdm(range(n_batches), desc="Qwen attack", unit="batch")
+    for i in pbar:
+        chunk = remaining.iloc[i * BATCH_SIZE:(i + 1) * BATCH_SIZE]
+        prompt_ids = chunk["prompt_id"].tolist()
+
         try:
-            result = process_one(row["text_native"], tokenizer, model, layer_indices)
-            save_hidden_vectors(HIDDEN_FILE, row["prompt_id"], result["hidden_vectors"])
+            results = process_batch(
+                chunk["text_native"].tolist(), tokenizer, model, layer_indices)
+            save_hidden_batch(HIDDEN_FILE, prompt_ids,
+                              [r["hidden_vectors"] for r in results])
 
-            new_responses.append({
-                "prompt_id": row["prompt_id"],
-                "response": result["response"],
-                "finish_reason": result["finish_reason"],
-                "entropy_first_tokens": result["entropy_first_tokens"],
-                "mean_top1_prob": result["mean_top1_prob"],
-                "mean_prob_gap": result["mean_prob_gap"],
-            })
+            for pid, r in zip(prompt_ids, results):
+                new_rows.append({
+                    "prompt_id": pid,
+                    "response": r["response"],
+                    "finish_reason": r["finish_reason"],
+                    "n_generated_tokens": r["n_generated_tokens"],
+                    "first_token_entropy": r["first_token_entropy"],
+                    "first_token_top1_prob": r["first_token_top1_prob"],
+                    "first_token_prob_gap": r["first_token_prob_gap"],
+                })
+
+        except torch.cuda.OutOfMemoryError:
+            tqdm.write(f"  OOM at batch {i} — lower BATCH_SIZE and rerun "
+                       f"(resume is automatic)")
+            torch.cuda.empty_cache()
+            break
         except Exception as e:
-            tqdm.write(f"Errore su {row['prompt_id']}: {e}")
-            new_responses.append({
-                "prompt_id": row["prompt_id"], "response": None,
-                "finish_reason": "error", "entropy_first_tokens": None,
-                "mean_top1_prob": None, "mean_prob_gap": None,
-            })
+            tqdm.write(f"  error at batch {i}: {e}")
+            for pid in prompt_ids:
+                new_rows.append({
+                    "prompt_id": pid, "response": None,
+                    "finish_reason": "error", "n_generated_tokens": None,
+                    "first_token_entropy": None, "first_token_top1_prob": None,
+                    "first_token_prob_gap": None,
+                })
 
-        if len(new_responses) % CHECKPOINT_EVERY == 0:
-            combined = pd.concat(
-                [existing_resp, pd.DataFrame(new_responses)], ignore_index=True)
-            combined.to_parquet(RESP_FILE, engine="pyarrow")
-            tqdm.write(f"  checkpoint: {len(combined)} risposte salvate")
+        done = len(new_rows)
+        if done:
+            rate = done / (time.time() - t_start)
+            eta_h = (len(remaining) - done) / rate / 3600 if rate else 0
+            pbar.set_postfix({"prompt/s": f"{rate:.2f}", "ETA": f"{eta_h:.1f}h"})
 
-    combined = pd.concat(
-        [existing_resp, pd.DataFrame(new_responses)], ignore_index=True)
-    combined.to_parquet(RESP_FILE, engine="pyarrow")
+        if (i + 1) % CHECKPOINT_EVERY_BATCHES == 0:
+            pd.concat([existing, pd.DataFrame(new_rows)],
+                      ignore_index=True).to_parquet(RESP_FILE, engine="pyarrow")
 
-    # Metadati di geometria — servono al passo di confronto per allineare le
-    # profondità relative tra i due modelli.
-    with open(os.path.join(DATA_DIR, "qwen3b_geometry.json"), "w") as f:
-        json.dump({"n_layers": n_layers, "layer_indices": layer_indices,
-                   "hidden_dim": model.config.hidden_size}, f, indent=2)
+    pbar.close()
 
-    print(f"\nCompletato: {len(combined)} risposte salvate in {RESP_FILE}")
-    print(f"Hidden states salvati in {HIDDEN_FILE}")
+    final = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
+    final.to_parquet(RESP_FILE, engine="pyarrow")
+
+    with open(GEOMETRY_FILE, "w") as f:
+        json.dump({"model": MODEL_ID, "n_layers": n_layers,
+                   "layer_indices": layer_indices,
+                   "hidden_dim": model.config.hidden_size,
+                   "max_new_tokens": MAX_NEW_TOKENS,
+                   "last_n_tokens_pooled": LAST_N_TOKENS,
+                   "n_sampled": len(df)}, f, indent=2)
+
+    print(f"\nDone in {(time.time() - t_start)/3600:.1f}h — {len(final)} responses")
+    print(f"  {RESP_FILE}")
+    print(f"  {HIDDEN_FILE}")
+    print(f"  {GEOMETRY_FILE}")
 
 
 if __name__ == "__main__":
